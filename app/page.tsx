@@ -54,6 +54,7 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Plus, Trash2, Search, X, QrCode, ChevronDown, Edit, Printer, LogOut, Lock, Mail } from "lucide-react"
+import { supabase } from "@/lib/supabase"
 
 interface Product {
   id: string
@@ -107,7 +108,7 @@ export default function ProductRegistrationApp() {
   const [connectionStatus, setConnectionStatus] = useState("Controleren...")
 
   // Data arrays - SINGLE SOURCE OF TRUTH
-  const [users, setUsers] = useState<{ name: string; role: string }[]>([])
+  const [users, setUsers] = useState<{ name: string; role: string; badgeCode?: string }[]>([])
   const [products, setProducts] = useState<Product[]>([])
   const [locations, setLocations] = useState<string[]>([])
   const [purposes, setPurposes] = useState<string[]>([])
@@ -127,6 +128,7 @@ export default function ProductRegistrationApp() {
   const [newUserEmail, setNewUserEmail] = useState("")
   const [newUserPassword, setNewUserPassword] = useState("")
   const [newUserLevel, setNewUserLevel] = useState("user")
+  const [newUserBadgeCode, setNewUserBadgeCode] = useState("")
 
   // Edit states
   const [editingProduct, setEditingProduct] = useState<Product | null>(null)
@@ -139,6 +141,7 @@ export default function ProductRegistrationApp() {
 
   const [editingUser, setEditingUser] = useState<string>("")
   const [editingUserRole, setEditingUserRole] = useState<string>("user")
+  const [editingUserBadgeCode, setEditingUserBadgeCode] = useState<string>("")
   const [originalUser, setOriginalUser] = useState<string>("")
   const [originalUserRole, setOriginalUserRole] = useState<string>("user")
   const [showEditUserDialog, setShowEditUserDialog] = useState(false)
@@ -483,14 +486,59 @@ export default function ProductRegistrationApp() {
     const user = users.find((u) => u.name === userName)
     setEditingUser(userName)
     setEditingUserRole(user?.role || "user")
+    setEditingUserBadgeCode(user?.badgeCode || "")
     setOriginalUser(userName)
     setOriginalUserRole(user?.role || "user")
     setShowEditUserDialog(true)
   }
 
   const handleSaveUser = async () => {
-    if (editingUser.trim() && (editingUser.trim() !== originalUser || editingUserRole !== originalUserRole)) {
+    if (
+      editingUser.trim() &&
+      (editingUser.trim() !== originalUser ||
+        editingUserRole !== originalUserRole ||
+        editingUserBadgeCode !== (users.find((u) => u.name === originalUser)?.badgeCode || ""))
+    ) {
       const result = await updateUser(originalUser, editingUser.trim(), editingUserRole)
+
+      // Update badge code in user_badges table
+      if (editingUserBadgeCode.trim()) {
+        try {
+          // First try to update existing badge
+          const { error: updateError } = await supabase
+            .from("user_badges")
+            .update({
+              badge_id: editingUserBadgeCode.trim(),
+              user_name: editingUser.trim(),
+            })
+            .eq("user_name", originalUser)
+
+          if (updateError) {
+            // If update fails, try to insert new badge
+            const { error: insertError } = await supabase.from("user_badges").insert([
+              {
+                badge_id: editingUserBadgeCode.trim(),
+                user_email: `${editingUser.trim().toLowerCase().replace(" ", ".")}@dematic.com`,
+                user_name: editingUser.trim(),
+              },
+            ])
+
+            if (insertError) {
+              console.error("Error saving badge:", insertError)
+            }
+          }
+        } catch (badgeErr) {
+          console.error("Badge update exception:", badgeErr)
+        }
+      } else {
+        // Remove badge if empty
+        try {
+          await supabase.from("user_badges").delete().eq("user_name", originalUser)
+        } catch (err) {
+          console.error("Error removing badge:", err)
+        }
+      }
+
       if (result.error) {
         setImportError("Fout bij opslaan gebruiker")
         setTimeout(() => setImportError(""), 3000)
@@ -1147,12 +1195,34 @@ export default function ProductRegistrationApp() {
         setImportError(`Fout bij aanmaken: ${result.error.message || "Onbekende fout"}`)
         setTimeout(() => setImportError(""), 5000)
       } else {
+        // Als er een badge code is, sla deze op in user_badges tabel
+        if (newUserBadgeCode.trim()) {
+          try {
+            const { error: badgeError } = await supabase.from("user_badges").insert([
+              {
+                badge_id: newUserBadgeCode.trim(),
+                user_email: newUserEmail.trim(),
+                user_name: newUserName.trim(),
+              },
+            ])
+
+            if (badgeError) {
+              console.error("Error saving badge:", badgeError)
+              setImportError("Gebruiker aangemaakt maar badge kon niet worden opgeslagen")
+              setTimeout(() => setImportError(""), 5000)
+            }
+          } catch (badgeErr) {
+            console.error("Badge save exception:", badgeErr)
+          }
+        }
+
         setImportMessage("✅ Gebruiker en inlog-account succesvol aangemaakt!")
         setTimeout(() => setImportMessage(""), 3000)
 
         setNewUserName("")
         setNewUserEmail("")
         setNewUserPassword("")
+        setNewUserBadgeCode("")
 
         const refreshResult = await fetchUsers()
         if (refreshResult.data) {
@@ -2173,6 +2243,14 @@ export default function ProductRegistrationApp() {
                                 </SelectContent>
                               </Select>
                             </div>
+                            <div>
+                              <Label className="text-sm font-medium">Badge Code</Label>
+                              <Input
+                                placeholder="Badge ID (optioneel)"
+                                value={newUserBadgeCode}
+                                onChange={(e) => setNewUserBadgeCode(e.target.value)}
+                              />
+                            </div>
                             <div className="flex items-end">
                               <Button
                                 onClick={addNewUserWithAuth}
@@ -2269,6 +2347,9 @@ export default function ProductRegistrationApp() {
                                   <div className="flex-1">
                                     <div className="font-medium text-gray-900">{user.name}</div>
                                     <div className="text-sm text-gray-600">App gebruiker</div>
+                                    <div className="text-xs text-gray-500 mt-1">
+                                      Badge: {user.badgeCode || "Geen badge gekoppeld"}
+                                    </div>
                                   </div>
                                   <div className="flex items-center gap-2">
                                     <div className="text-sm font-medium px-2 py-1 rounded-full bg-blue-100 text-blue-800">
@@ -3062,7 +3143,7 @@ export default function ProductRegistrationApp() {
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Gebruiker Bewerken</DialogTitle>
-              <DialogDescription>Wijzig de gebruiker naam en rol</DialogDescription>
+              <DialogDescription>Wijzig de gebruiker naam, rol en badge code</DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div>
@@ -3080,6 +3161,14 @@ export default function ProductRegistrationApp() {
                     <SelectItem value="admin">Admin</SelectItem>
                   </SelectContent>
                 </Select>
+              </div>
+              <div>
+                <Label>Badge Code</Label>
+                <Input
+                  value={editingUserBadgeCode}
+                  onChange={(e) => setEditingUserBadgeCode(e.target.value)}
+                  placeholder="Badge ID (optioneel)"
+                />
               </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setShowEditUserDialog(false)}>
