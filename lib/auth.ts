@@ -67,6 +67,52 @@ export async function signIn(email: string, password: string) {
 }
 
 /**
+ * Signs in with NFC badge
+ */
+export async function signInWithBadge(badgeId: string) {
+  if (!supabase) {
+    console.log("⚠️ Supabase not configured - mock badge authentication")
+    return { data: null, error: { message: "Supabase not configured" } }
+  }
+
+  try {
+    console.log("🏷️ Attempting badge sign in for badge:", badgeId)
+
+    // Zoek gebruiker op basis van badge ID
+    const { data: badgeData, error: badgeError } = await supabase
+      .from("user_badges")
+      .select("user_email, user_name")
+      .eq("badge_id", badgeId)
+      .single()
+
+    if (badgeError || !badgeData) {
+      console.error("🏷️ Badge not found:", badgeError)
+      return { data: null, error: { message: "Badge niet gevonden" } }
+    }
+
+    console.log("🏷️ Badge found for user:", badgeData.user_email)
+
+    // Maak een mock user object (zelfde structuur als normale login)
+    const mockUser = {
+      id: `badge-user-${badgeId}`,
+      email: badgeData.user_email,
+      user_metadata: {
+        name: badgeData.user_name || badgeData.user_email.split("@")[0],
+      },
+    }
+
+    console.log("✅ Badge sign in successful:", badgeData.user_email)
+    return {
+      data: { user: mockUser },
+      error: null,
+    }
+  } catch (error) {
+    console.error("🏷️ Badge sign in exception:", error)
+    return { data: null, error }
+  }
+}
+
+/**
  * Signs out the current user
  */
 export async function signOut() {
