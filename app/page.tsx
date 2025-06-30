@@ -504,28 +504,20 @@ export default function ProductRegistrationApp() {
       // Update badge code in user_badges table
       if (editingUserBadgeCode.trim()) {
         try {
-          // First try to update existing badge
-          const { error: updateError } = await supabase
-            .from("user_badges")
-            .update({
+          // First delete any existing badge for this user
+          await supabase.from("user_badges").delete().eq("user_name", originalUser)
+
+          // Then insert the new badge
+          const { error: insertError } = await supabase.from("user_badges").insert([
+            {
               badge_id: editingUserBadgeCode.trim(),
+              user_email: `${editingUser.trim().toLowerCase().replace(/\s+/g, ".")}@dematic.com`,
               user_name: editingUser.trim(),
-            })
-            .eq("user_name", originalUser)
+            },
+          ])
 
-          if (updateError) {
-            // If update fails, try to insert new badge
-            const { error: insertError } = await supabase.from("user_badges").insert([
-              {
-                badge_id: editingUserBadgeCode.trim(),
-                user_email: `${editingUser.trim().toLowerCase().replace(" ", ".")}@dematic.com`,
-                user_name: editingUser.trim(),
-              },
-            ])
-
-            if (insertError) {
-              console.error("Error saving badge:", insertError)
-            }
+          if (insertError) {
+            console.error("Error saving badge:", insertError)
           }
         } catch (badgeErr) {
           console.error("Badge update exception:", badgeErr)
@@ -1565,7 +1557,7 @@ export default function ProductRegistrationApp() {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
-          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-600 mx-auto mb-4"></div>
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-amber-600 mx-auto mb-4" />
           <p className="text-gray-600 mb-2">App wordt geladen...</p>
           <p className="text-xs text-gray-500">{connectionStatus}</p>
         </div>
