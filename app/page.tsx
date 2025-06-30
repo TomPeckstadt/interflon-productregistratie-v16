@@ -38,6 +38,7 @@ import {
   uploadPDFToStorage,
   deletePDFFromStorage,
   createAuthUser,
+  supabase,
 } from "@/lib/supabase"
 
 // Auth imports
@@ -54,7 +55,6 @@ import { Input } from "@/components/ui/input"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Plus, Trash2, Search, X, QrCode, ChevronDown, Edit, Printer, LogOut, Lock, Mail } from "lucide-react"
-import { supabase } from "@/lib/supabase"
 
 interface Product {
   id: string
@@ -144,6 +144,7 @@ export default function ProductRegistrationApp() {
   const [editingUserBadgeCode, setEditingUserBadgeCode] = useState<string>("")
   const [originalUser, setOriginalUser] = useState<string>("")
   const [originalUserRole, setOriginalUserRole] = useState<string>("user")
+  const [originalUserBadgeCode, setOriginalUserBadgeCode] = useState<string>("")
   const [showEditUserDialog, setShowEditUserDialog] = useState(false)
 
   const [editingLocation, setEditingLocation] = useState<string>("")
@@ -186,6 +187,100 @@ export default function ProductRegistrationApp() {
   // Badge login state
   const [badgeId, setBadgeId] = useState("")
   const [badgeError, setBadgeError] = useState("")
+
+  // Helper function to load badge codes for users
+  const loadUserBadges = async () => {
+    if (!supabase) {
+      console.log("📋 No Supabase - returning empty badge map")
+      return {}
+    }
+
+    try {
+      console.log("📋 Loading user badges from database...")
+      const { data, error } = await supabase.from("user_badges").select("*")
+
+      if (error) {
+        console.error("❌ Error loading badges:", error)
+        return {}
+      }
+
+      console.log("📋 Raw badge data from database:", data)
+
+      const badgeMap: Record<string, string> = {}
+      data?.forEach((badge) => {
+        if (badge.user_name && badge.badge_id) {
+          badgeMap[badge.user_name] = badge.badge_id
+          console.log(`📋 Mapped badge: ${badge.user_name} -> ${badge.badge_id}`)
+        }
+      })
+
+      console.log("📋 Final badge map:", badgeMap)
+      return badgeMap
+    } catch (error) {
+      console.error("❌ Exception loading badges:", error)
+      return {}
+    }
+  }
+
+  // Helper function to save badge code
+  const saveBadgeCode = async (badgeCode: string, userEmail: string, userName: string) => {
+    if (!supabase || !badgeCode.trim()) {
+      console.log("💾 No badge to save or no supabase")
+      return { success: true }
+    }
+
+    try {
+      console.log("💾 Saving badge code:", { badgeCode, userEmail, userName })
+
+      // First, delete any existing badge for this user
+      const { error: deleteError } = await supabase.from("user_badges").delete().eq("user_name", userName)
+
+      if (deleteError) {
+        console.log("⚠️ Delete error (might be expected if no existing badge):", deleteError)
+      }
+
+      // Then insert the new badge
+      const { error: insertError } = await supabase.from("user_badges").insert([
+        {
+          badge_id: badgeCode.trim(),
+          user_email: userEmail,
+          user_name: userName,
+        },
+      ])
+
+      if (insertError) {
+        console.error("❌ Error saving badge:", insertError)
+        return { success: false, error: insertError }
+      }
+
+      console.log("✅ Badge saved successfully")
+      return { success: true }
+    } catch (error) {
+      console.error("❌ Exception saving badge:", error)
+      return { success: false, error }
+    }
+  }
+
+  // Helper function to refresh users with badge codes
+  const refreshUsersWithBadges = async () => {
+    console.log("🔄 Refreshing users with badges...")
+
+    const usersResult = await fetchUsers()
+    if (usersResult.data) {
+      console.log("👥 Fetched users:", usersResult.data)
+
+      const badgeMap = await loadUserBadges()
+      console.log("🏷️ Badge map:", badgeMap)
+
+      const usersWithBadges = usersResult.data.map((user) => ({
+        ...user,
+        badgeCode: badgeMap[user.name] || "",
+      }))
+
+      console.log("👥 Users with badges:", usersWithBadges)
+      setUsers(usersWithBadges)
+    }
+  }
 
   // Login function
   const handleLogin = async (e: React.FormEvent) => {
@@ -489,61 +584,90 @@ export default function ProductRegistrationApp() {
     setEditingUserBadgeCode(user?.badgeCode || "")
     setOriginalUser(userName)
     setOriginalUserRole(user?.role || "user")
+    setOriginalUserBadgeCode(user?.badgeCode || "")
     setShowEditUserDialog(true)
   }
 
   const handleSaveUser = async () => {
-    if (
-      editingUser.trim() &&
-      (editingUser.trim() !== originalUser ||
-        editingUserRole !== originalUserRole ||
-        editingUserBadgeCode !== (users.find((u) => u.name === originalUser)?.badgeCode || ""))
-    ) {
+    if (!editingUser.trim()) {
+      setImportError("Gebruikersnaam is verplicht")
+      setTimeout(() => setImportError(""), 3000)
+      return
+    }
+
+    const hasChanges =
+      editingUser.trim() !== originalUser ||
+      editingUserRole !== originalUserRole ||
+      editingUserBadgeCode.trim() !== originalUserBadgeCode
+
+    if (!hasChanges) {
+      setShowEditUserDialog(false)
+      return
+    }
+
+    setIsLoading(true)
+
+    try {
+      console.log("💾 Saving user changes:", {
+        originalUser,
+        editingUser: editingUser.trim(),
+        editingUserRole,
+        editingUserBadgeCode: editingUserBadgeCode.trim(),
+        originalUserBadgeCode,
+      })
+
+      // Update user in users table
       const result = await updateUser(originalUser, editingUser.trim(), editingUserRole)
-
-      // Update badge code in user_badges table
-      if (editingUserBadgeCode.trim()) {
-        try {
-          // First delete any existing badge for this user
-          await supabase.from("user_badges").delete().eq("user_name", originalUser)
-
-          // Then insert the new badge
-          const { error: insertError } = await supabase.from("user_badges").insert([
-            {
-              badge_id: editingUserBadgeCode.trim(),
-              user_email: `${editingUser.trim().toLowerCase().replace(/\s+/g, ".")}@dematic.com`,
-              user_name: editingUser.trim(),
-            },
-          ])
-
-          if (insertError) {
-            console.error("Error saving badge:", insertError)
-          }
-        } catch (badgeErr) {
-          console.error("Badge update exception:", badgeErr)
-        }
-      } else {
-        // Remove badge if empty
-        try {
-          await supabase.from("user_badges").delete().eq("user_name", originalUser)
-        } catch (err) {
-          console.error("Error removing badge:", err)
-        }
-      }
 
       if (result.error) {
         setImportError("Fout bij opslaan gebruiker")
         setTimeout(() => setImportError(""), 3000)
-      } else {
-        // FORCE LOCAL STATE UPDATE
-        const refreshResult = await fetchUsers()
-        if (refreshResult.data) {
-          setUsers(refreshResult.data)
-        }
-        setImportMessage("✅ Gebruiker aangepast!")
-        setTimeout(() => setImportMessage(""), 2000)
+        setIsLoading(false)
+        return
       }
+
+      // Handle badge code update
+      if (editingUserBadgeCode.trim() !== originalUserBadgeCode) {
+        const userEmail = `${editingUser.trim().toLowerCase().replace(/\s+/g, ".")}@dematic.com`
+
+        if (editingUserBadgeCode.trim()) {
+          // Save new badge
+          const badgeResult = await saveBadgeCode(editingUserBadgeCode.trim(), userEmail, editingUser.trim())
+
+          if (!badgeResult.success) {
+            setImportError("Gebruiker opgeslagen maar badge kon niet worden opgeslagen")
+            setTimeout(() => setImportError(""), 5000)
+          } else {
+            setImportMessage("✅ Gebruiker en badge succesvol aangepast!")
+            setTimeout(() => setImportMessage(""), 3000)
+          }
+        } else {
+          // Remove badge if empty
+          if (supabase) {
+            try {
+              await supabase.from("user_badges").delete().eq("user_name", originalUser)
+              console.log("🗑️ Badge removed for user:", originalUser)
+              setImportMessage("✅ Gebruiker aangepast en badge verwijderd!")
+              setTimeout(() => setImportMessage(""), 3000)
+            } catch (err) {
+              console.error("Error removing badge:", err)
+            }
+          }
+        }
+      } else {
+        setImportMessage("✅ Gebruiker succesvol aangepast!")
+        setTimeout(() => setImportMessage(""), 3000)
+      }
+
+      // Refresh users list with badge codes
+      await refreshUsersWithBadges()
       setShowEditUserDialog(false)
+    } catch (error) {
+      console.error("❌ Exception in handleSaveUser:", error)
+      setImportError("Er ging iets mis bij het opslaan")
+      setTimeout(() => setImportError(""), 3000)
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -997,7 +1121,15 @@ export default function ProductRegistrationApp() {
             setIsSupabaseConnected(true)
             setConnectionStatus("Supabase verbonden")
 
-            setUsers(usersResult.data || [])
+            // Load users with badge codes
+            const badgeMap = await loadUserBadges()
+            const usersWithBadges = (usersResult.data || []).map((user) => ({
+              ...user,
+              badgeCode: badgeMap[user.name] || "",
+            }))
+
+            console.log("👥 Setting users with badges:", usersWithBadges)
+            setUsers(usersWithBadges)
             setProducts(productsResult.data || [])
             setLocations(locationsResult.data || [])
             setPurposes(purposesResult.data || [])
@@ -1039,12 +1171,12 @@ export default function ProductRegistrationApp() {
   const loadMockData = () => {
     console.log("📱 Loading mock data...")
     const mockUsers = [
-      { name: "Tom Peckstadt", role: "admin" },
-      { name: "Sven De Poorter", role: "user" },
-      { name: "Nele Herteleer", role: "user" },
-      { name: "Wim Peckstadt", role: "admin" },
-      { name: "Siegfried Weverbergh", role: "user" },
-      { name: "Jan Janssen", role: "user" },
+      { name: "Tom Peckstadt", role: "admin", badgeCode: "BADGE001" },
+      { name: "Sven De Poorter", role: "user", badgeCode: "" },
+      { name: "Nele Herteleer", role: "user", badgeCode: "BADGE003" },
+      { name: "Wim Peckstadt", role: "admin", badgeCode: "" },
+      { name: "Siegfried Weverbergh", role: "user", badgeCode: "BADGE005" },
+      { name: "Jan Janssen", role: "user", badgeCode: "" },
     ]
     const mockProducts = [
       { id: "1", name: "Interflon Metal Clean spray 500ml", qrcode: "IFLS001", categoryId: "1" },
@@ -1104,9 +1236,10 @@ export default function ProductRegistrationApp() {
   const setupSubscriptions = () => {
     console.log("🔔 Setting up real-time subscriptions...")
 
-    const usersSub = subscribeToUsers((newUsers) => {
+    const usersSub = subscribeToUsers(async (newUsers) => {
       console.log("🔔 Users updated via subscription:", newUsers.length)
-      setUsers(newUsers)
+      // Reload users with badge codes when users change
+      await refreshUsersWithBadges()
     })
 
     const productsSub = subscribeToProducts((newProducts) => {
@@ -1153,10 +1286,7 @@ export default function ProductRegistrationApp() {
         setImportError("Fout bij opslaan gebruiker")
         setTimeout(() => setImportError(""), 3000)
       } else {
-        const refreshResult = await fetchUsers()
-        if (refreshResult.data) {
-          setUsers(refreshResult.data)
-        }
+        await refreshUsersWithBadges()
         setImportMessage("✅ Gebruiker toegevoegd!")
         setTimeout(() => setImportMessage(""), 2000)
       }
@@ -1177,6 +1307,8 @@ export default function ProductRegistrationApp() {
       return
     }
 
+    setIsLoading(true)
+
     try {
       setImportMessage("👤 Bezig met aanmaken gebruiker en inlog-account...")
 
@@ -1187,44 +1319,35 @@ export default function ProductRegistrationApp() {
         setImportError(`Fout bij aanmaken: ${result.error.message || "Onbekende fout"}`)
         setTimeout(() => setImportError(""), 5000)
       } else {
-        // Als er een badge code is, sla deze op in user_badges tabel
+        // Save badge code if provided
         if (newUserBadgeCode.trim()) {
-          try {
-            const { error: badgeError } = await supabase.from("user_badges").insert([
-              {
-                badge_id: newUserBadgeCode.trim(),
-                user_email: newUserEmail.trim(),
-                user_name: newUserName.trim(),
-              },
-            ])
+          const badgeResult = await saveBadgeCode(newUserBadgeCode.trim(), newUserEmail.trim(), newUserName.trim())
 
-            if (badgeError) {
-              console.error("Error saving badge:", badgeError)
-              setImportError("Gebruiker aangemaakt maar badge kon niet worden opgeslagen")
-              setTimeout(() => setImportError(""), 5000)
-            }
-          } catch (badgeErr) {
-            console.error("Badge save exception:", badgeErr)
+          if (!badgeResult.success) {
+            setImportError("Gebruiker aangemaakt maar badge kon niet worden opgeslagen")
+            setTimeout(() => setImportError(""), 5000)
+          } else {
+            setImportMessage("✅ Gebruiker, inlog-account en badge succesvol aangemaakt!")
+            setTimeout(() => setImportMessage(""), 3000)
           }
+        } else {
+          setImportMessage("✅ Gebruiker en inlog-account succesvol aangemaakt!")
+          setTimeout(() => setImportMessage(""), 3000)
         }
-
-        setImportMessage("✅ Gebruiker en inlog-account succesvol aangemaakt!")
-        setTimeout(() => setImportMessage(""), 3000)
 
         setNewUserName("")
         setNewUserEmail("")
         setNewUserPassword("")
         setNewUserBadgeCode("")
 
-        const refreshResult = await fetchUsers()
-        if (refreshResult.data) {
-          setUsers(refreshResult.data)
-        }
+        await refreshUsersWithBadges()
       }
     } catch (error) {
       console.error("Exception creating auth user:", error)
       setImportError("Er ging iets mis bij het aanmaken van de gebruiker")
       setTimeout(() => setImportError(""), 3000)
+    } finally {
+      setIsLoading(false)
     }
   }
 
@@ -1321,10 +1444,7 @@ export default function ProductRegistrationApp() {
       setImportError("Fout bij verwijderen gebruiker")
       setTimeout(() => setImportError(""), 3000)
     } else {
-      const refreshResult = await fetchUsers()
-      if (refreshResult.data) {
-        setUsers(refreshResult.data)
-      }
+      await refreshUsersWithBadges()
       setImportMessage("✅ Gebruiker verwijderd!")
       setTimeout(() => setImportMessage(""), 2000)
     }
@@ -2250,12 +2370,13 @@ export default function ProductRegistrationApp() {
                                   !newUserName.trim() ||
                                   !newUserEmail.trim() ||
                                   !newUserPassword.trim() ||
-                                  newUserPassword.length < 6
+                                  newUserPassword.length < 6 ||
+                                  isLoading
                                 }
                                 className="w-full flex items-center gap-2"
                               >
                                 <Plus className="h-4 w-4" />
-                                Gebruiker + Login Toevoegen
+                                {isLoading ? "Bezig..." : "Gebruiker + Login Toevoegen"}
                               </Button>
                             </div>
                           </div>
@@ -2974,63 +3095,27 @@ export default function ProductRegistrationApp() {
 
                     <Card className="shadow-sm">
                       <CardHeader className="bg-gray-50 border-b">
-                        <CardTitle className="text-lg">Top 5 Producten</CardTitle>
+                        <CardTitle className="text-lg">Product Verdeling</CardTitle>
                       </CardHeader>
                       <CardContent className="p-6">
                         <div className="space-y-4">
-                          <div className="flex justify-center">
-                            <div className="relative w-32 h-32">
-                              <svg viewBox="0 0 100 100" className="w-full h-full transform -rotate-90">
-                                {(() => {
-                                  const chartData = getProductChartData()
-                                  const total = chartData.reduce((sum, item) => sum + item.count, 0)
-                                  let currentAngle = 0
-
-                                  return chartData.map((item, index) => {
-                                    const percentage = (item.count / total) * 100
-                                    const angle = (percentage / 100) * 360
-                                    const startAngle = currentAngle
-                                    const endAngle = currentAngle + angle
-
-                                    const x1 = 50 + 40 * Math.cos((startAngle * Math.PI) / 180)
-                                    const y1 = 50 + 40 * Math.sin((startAngle * Math.PI) / 180)
-                                    const x2 = 50 + 40 * Math.cos((endAngle * Math.PI) / 180)
-                                    const y2 = 50 + 40 * Math.sin((endAngle * Math.PI) / 180)
-
-                                    const largeArcFlag = angle > 180 ? 1 : 0
-
-                                    const pathData = [
-                                      `M 50 50`,
-                                      `L ${x1} ${y1}`,
-                                      `A 40 40 0 ${largeArcFlag} 1 ${x2} ${y2}`,
-                                      "Z",
-                                    ].join(" ")
-
-                                    currentAngle += angle
-
-                                    return (
-                                      <path key={index} d={pathData} fill={item.color} stroke="white" strokeWidth="1" />
-                                    )
-                                  })
-                                })()}
-                              </svg>
-                            </div>
-                          </div>
-
-                          <div className="space-y-2">
-                            {getProductChartData().map((item, index) => (
-                              <div key={index} className="flex items-center gap-2 text-xs">
-                                <div
-                                  className="w-3 h-3 rounded-full flex-shrink-0"
-                                  style={{ backgroundColor: item.color }}
-                                ></div>
-                                <div className="flex-1 truncate" title={item.product}>
-                                  {item.product}
-                                </div>
-                                <div className="font-bold">{item.count}</div>
+                          {getProductChartData().map((item) => (
+                            <div key={item.product} className="space-y-2">
+                              <div className="flex justify-between text-sm">
+                                <span className="font-medium">{item.product}</span>
+                                <span className="font-bold">{item.count}</span>
                               </div>
-                            ))}
-                          </div>
+                              <div className="w-full bg-gray-200 rounded-full h-2">
+                                <div
+                                  className="h-2 rounded-full"
+                                  style={{
+                                    backgroundColor: item.color,
+                                    width: `${(item.count / Math.max(...getProductChartData().map((d) => d.count))) * 100}%`,
+                                  }}
+                                />
+                              </div>
+                            </div>
+                          ))}
                         </div>
                       </CardContent>
                     </Card>
@@ -3041,51 +3126,66 @@ export default function ProductRegistrationApp() {
           )}
         </Tabs>
 
-        {/* QR Scanner Modal */}
-        {showQrScanner && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg p-6 max-w-md w-full">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold">QR Code Scanner</h3>
-                <Button variant="outline" size="sm" onClick={stopQrScanner}>
-                  <X className="h-4 w-4" />
+        {/* Edit User Dialog */}
+        <Dialog open={showEditUserDialog} onOpenChange={setShowEditUserDialog}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Gebruiker Bewerken</DialogTitle>
+              <DialogDescription>Wijzig de gebruikersgegevens en badge informatie</DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4">
+              <div>
+                <Label>Naam</Label>
+                <Input
+                  value={editingUser}
+                  onChange={(e) => setEditingUser(e.target.value)}
+                  placeholder="Gebruikersnaam"
+                />
+              </div>
+              <div>
+                <Label>Rol</Label>
+                <Select value={editingUserRole} onValueChange={setEditingUserRole}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Selecteer rol" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="user">User</SelectItem>
+                    <SelectItem value="admin">Admin</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Badge Code</Label>
+                <Input
+                  value={editingUserBadgeCode}
+                  onChange={(e) => setEditingUserBadgeCode(e.target.value)}
+                  placeholder="Badge ID (optioneel)"
+                />
+                <div className="text-xs text-gray-500 mt-1">Laat leeg om badge te verwijderen</div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" onClick={() => setShowEditUserDialog(false)}>
+                  Annuleren
+                </Button>
+                <Button onClick={handleSaveUser} disabled={isLoading}>
+                  {isLoading ? "Opslaan..." : "Opslaan"}
                 </Button>
               </div>
-              <div className="space-y-4">
-                <div className="bg-gray-100 border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-                  <QrCode className="h-12 w-12 mx-auto text-gray-400 mb-4" />
-                  <p className="text-gray-600 mb-4">Richt je camera op een QR code</p>
-                  <div className="space-y-2">
-                    <Input
-                      placeholder="Of voer QR code handmatig in"
-                      value={qrScanResult}
-                      onChange={(e) => setQrScanResult(e.target.value)}
-                    />
-                    <Button
-                      onClick={() => handleQrCodeDetected(qrScanResult)}
-                      disabled={!qrScanResult.trim()}
-                      className="w-full"
-                    >
-                      QR Code Gebruiken
-                    </Button>
-                  </div>
-                </div>
-              </div>
             </div>
-          </div>
-        )}
+          </DialogContent>
+        </Dialog>
 
-        {/* Edit Dialogs */}
+        {/* Edit Product Dialog */}
         <Dialog open={showEditDialog} onOpenChange={setShowEditDialog}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Product Bewerken</DialogTitle>
-              <DialogDescription>Wijzig de product gegevens</DialogDescription>
+              <DialogDescription>Wijzig de productgegevens</DialogDescription>
             </DialogHeader>
             {editingProduct && (
               <div className="space-y-4">
                 <div>
-                  <Label>Product Naam</Label>
+                  <Label>Naam</Label>
                   <Input
                     value={editingProduct.name}
                     onChange={(e) => setEditingProduct({ ...editingProduct, name: e.target.value })}
@@ -3096,7 +3196,6 @@ export default function ProductRegistrationApp() {
                   <Input
                     value={editingProduct.qrcode || ""}
                     onChange={(e) => setEditingProduct({ ...editingProduct, qrcode: e.target.value })}
-                    placeholder="Optioneel"
                   />
                 </div>
                 <div>
@@ -3108,7 +3207,7 @@ export default function ProductRegistrationApp() {
                     }
                   >
                     <SelectTrigger>
-                      <SelectValue />
+                      <SelectValue placeholder="Selecteer categorie" />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="none">Geen categorie</SelectItem>
@@ -3131,57 +3230,17 @@ export default function ProductRegistrationApp() {
           </DialogContent>
         </Dialog>
 
-        <Dialog open={showEditUserDialog} onOpenChange={setShowEditUserDialog}>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Gebruiker Bewerken</DialogTitle>
-              <DialogDescription>Wijzig de gebruiker naam, rol en badge code</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div>
-                <Label>Gebruiker Naam</Label>
-                <Input value={editingUser} onChange={(e) => setEditingUser(e.target.value)} />
-              </div>
-              <div>
-                <Label>Rol</Label>
-                <Select value={editingUserRole} onValueChange={setEditingUserRole}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="user">User</SelectItem>
-                    <SelectItem value="admin">Admin</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>Badge Code</Label>
-                <Input
-                  value={editingUserBadgeCode}
-                  onChange={(e) => setEditingUserBadgeCode(e.target.value)}
-                  placeholder="Badge ID (optioneel)"
-                />
-              </div>
-              <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => setShowEditUserDialog(false)}>
-                  Annuleren
-                </Button>
-                <Button onClick={handleSaveUser}>Opslaan</Button>
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
-
+        {/* Edit Category Dialog */}
         <Dialog open={showEditCategoryDialog} onOpenChange={setShowEditCategoryDialog}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Categorie Bewerken</DialogTitle>
-              <DialogDescription>Wijzig de categorie naam</DialogDescription>
+              <DialogDescription>Wijzig de categorienaam</DialogDescription>
             </DialogHeader>
             {editingCategory && (
               <div className="space-y-4">
                 <div>
-                  <Label>Categorie Naam</Label>
+                  <Label>Naam</Label>
                   <Input
                     value={editingCategory.name}
                     onChange={(e) => setEditingCategory({ ...editingCategory, name: e.target.value })}
@@ -3198,15 +3257,16 @@ export default function ProductRegistrationApp() {
           </DialogContent>
         </Dialog>
 
+        {/* Edit Location Dialog */}
         <Dialog open={showEditLocationDialog} onOpenChange={setShowEditLocationDialog}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Locatie Bewerken</DialogTitle>
-              <DialogDescription>Wijzig de locatie naam</DialogDescription>
+              <DialogDescription>Wijzig de locatienaam</DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label>Locatie Naam</Label>
+                <Label>Naam</Label>
                 <Input value={editingLocation} onChange={(e) => setEditingLocation(e.target.value)} />
               </div>
               <div className="flex justify-end gap-2">
@@ -3219,15 +3279,16 @@ export default function ProductRegistrationApp() {
           </DialogContent>
         </Dialog>
 
+        {/* Edit Purpose Dialog */}
         <Dialog open={showEditPurposeDialog} onOpenChange={setShowEditPurposeDialog}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Doel Bewerken</DialogTitle>
-              <DialogDescription>Wijzig het doel</DialogDescription>
+              <DialogDescription>Wijzig de doelnaam</DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
               <div>
-                <Label>Doel</Label>
+                <Label>Naam</Label>
                 <Input value={editingPurpose} onChange={(e) => setEditingPurpose(e.target.value)} />
               </div>
               <div className="flex justify-end gap-2">
