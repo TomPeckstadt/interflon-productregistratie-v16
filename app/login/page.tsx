@@ -54,6 +54,14 @@ export default function Login() {
     setIsBadgeLoading(false)
   }
 
+  const handleScanBadge = () => {
+    const badgeInput = document.getElementById("badgeId") as HTMLInputElement
+    if (badgeInput) {
+      badgeInput.focus()
+      setBadgeId("") // Clear any existing value
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
       <Card className="w-full max-w-md">
@@ -110,6 +118,13 @@ export default function Login() {
           {/* Badge Login Section */}
           <div className="mt-4 pt-4 border-t border-gray-200">
             <div className="text-center text-sm text-gray-600 mb-3">Of log in met je badge</div>
+
+            {/* Scan Badge Button */}
+            <Button type="button" onClick={handleScanBadge} className="w-full bg-blue-600 hover:bg-blue-700 mb-3">
+              <Badge className="mr-2 h-4 w-4" />
+              Scan badge
+            </Button>
+
             <form onSubmit={handleBadgeSubmit} className="space-y-3">
               <div className="space-y-2">
                 <Label htmlFor="badgeId">Badge ID</Label>
@@ -118,18 +133,10 @@ export default function Login() {
                   type="text"
                   value={badgeId}
                   onChange={(e) => setBadgeId(e.target.value)}
-                  placeholder="Scan je badge hier..."
+                  placeholder="Badge ID verschijnt hier..."
                   className="text-center"
                 />
               </div>
-              <Button
-                type="button"
-                onClick={() => document.getElementById("badgeId")?.focus()}
-                className="w-full bg-blue-600 hover:bg-blue-700 mb-2"
-              >
-                <Badge className="mr-2 h-4 w-4" />
-                Scan badge
-              </Button>
               <Button
                 type="submit"
                 variant="outline"
