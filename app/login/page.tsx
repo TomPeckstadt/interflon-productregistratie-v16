@@ -123,6 +123,14 @@ export default function Login() {
                 />
               </div>
               <Button
+                type="button"
+                onClick={() => document.getElementById("badgeId")?.focus()}
+                className="w-full bg-blue-600 hover:bg-blue-700 mb-2"
+              >
+                <Badge className="mr-2 h-4 w-4" />
+                Scan badge
+              </Button>
+              <Button
                 type="submit"
                 variant="outline"
                 className="w-full border-red-200 text-red-600 hover:bg-red-50 bg-transparent"
