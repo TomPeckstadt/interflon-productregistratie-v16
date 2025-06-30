@@ -41,7 +41,7 @@ import {
 } from "@/lib/supabase"
 
 // Auth imports
-import { signIn, getCurrentUser, onAuthStateChange } from "@/lib/auth"
+import { signIn, getCurrentUser, onAuthStateChange, signInWithBadge } from "@/lib/auth"
 
 // UI Components
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -180,6 +180,10 @@ export default function ProductRegistrationApp() {
   const [loginPassword, setLoginPassword] = useState("")
   const [loginError, setLoginError] = useState("")
 
+  // Badge login state
+  const [badgeId, setBadgeId] = useState("")
+  const [badgeError, setBadgeError] = useState("")
+
   // Login function
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -225,6 +229,51 @@ export default function ProductRegistrationApp() {
     } catch (error) {
       console.error("🔐 Login exception:", error)
       setLoginError("Er ging iets mis bij het inloggen")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Badge login function
+  const handleBadgeLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!badgeId.trim()) {
+      setBadgeError("Voer je badge ID in")
+      return
+    }
+
+    setIsLoading(true)
+    setBadgeError("")
+    setLoginError("") // Clear any existing login errors
+
+    try {
+      console.log("🏷️ Attempting badge login with ID:", badgeId)
+
+      const result = await signInWithBadge(badgeId.trim())
+
+      if (result.error) {
+        console.error("🏷️ Badge login error:", result.error)
+        setBadgeError(result.error.message || "Badge login mislukt")
+      } else if (result.data?.user) {
+        console.log("✅ Badge login successful:", result.data.user.email)
+
+        // Get user name from email or user metadata
+        const userName = result.data.user.user_metadata?.name || result.data.user.email?.split("@")[0] || "Gebruiker"
+
+        setLoggedInUser(userName)
+        setCurrentUser(userName)
+        setIsLoggedIn(true)
+
+        // Reset badge form
+        setBadgeId("")
+        setBadgeError("")
+      } else {
+        setBadgeError("Badge login mislukt - geen gebruikersgegevens ontvangen")
+      }
+    } catch (error) {
+      console.error("🏷️ Badge login exception:", error)
+      setBadgeError("Er ging iets mis bij het badge login")
     } finally {
       setIsLoading(false)
     }
@@ -1533,6 +1582,61 @@ export default function ProductRegistrationApp() {
                     className="h-12"
                     required
                   />
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-sm font-medium flex items-center gap-2">🏷️ Badge Login</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      type="text"
+                      placeholder="Scan of voer badge ID in"
+                      value={badgeId}
+                      onChange={(e) => setBadgeId(e.target.value)}
+                      className="h-12 flex-1"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault()
+                          handleBadgeLogin(e)
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      onClick={(e) => {
+                        // Focus the input field for external NFC readers
+                        const badgeInput = document.querySelector(
+                          'input[placeholder="Scan of voer badge ID in"]',
+                        ) as HTMLInputElement
+                        if (badgeInput) {
+                          badgeInput.focus()
+                        }
+                      }}
+                      className="h-12 px-4 bg-blue-600 hover:bg-blue-700"
+                      disabled={isLoading}
+                    >
+                      🏷️ Scan badge
+                    </Button>
+                  </div>
+                  {badgeError && (
+                    <div className="text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">{badgeError}</div>
+                  )}
+                  <Button
+                    type="button"
+                    onClick={handleBadgeLogin}
+                    className="w-full h-12 bg-green-600 hover:bg-green-700"
+                    disabled={isLoading || !badgeId.trim()}
+                  >
+                    {isLoading ? "Bezig met badge login..." : "🏷️ Login met Badge"}
+                  </Button>
+                </div>
+
+                <div className="relative">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-white px-2 text-muted-foreground">Of</span>
+                  </div>
                 </div>
 
                 {loginError && (
